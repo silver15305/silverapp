@@ -84,7 +84,7 @@ class PushService {
               keyId: config.push.apns.keyId,
               teamId: config.push.apns.teamId
             },
-            production: config.push.apns.production
+            production: config.push.apns.production === 'true' // Convert string to boolean
           });
           logger.info('Apple Push Notification Service (APNs) initialized');
         } catch (error) {

@@ -246,9 +246,6 @@ Friend.prototype.accept = async function() {
   this.status = 'accepted';
   this.accepted_at = new Date();
   await this.save();
-  
-  // Create reciprocal friendship record if it doesn't exist
-  await Friend.createReciprocalFriendship(this.user_id, this.friend_id, this.requested_by);
 };
 
 /**
@@ -443,18 +440,6 @@ Friend.getMutualFriends = async function(userId1, userId2) {
   );
   
   return user1FriendIds.filter(id => user2FriendIds.includes(id));
-};
-
-/**
- * Create reciprocal friendship record
- * @param {string} userId1 - First user ID
- * @param {string} userId2 - Second user ID
- * @param {string} requestedBy - User who initiated the request
- */
-Friend.createReciprocalFriendship = async function(userId1, userId2, requestedBy) {
-  // This method ensures both users have the friendship record
-  // Implementation depends on your specific requirements
-  // For now, we use a single record approach with proper ordering
 };
 
 /**

@@ -8,7 +8,6 @@ const multer = require('multer');
 const { authenticate } = require('../middleware/auth');
 const { uploadRateLimit } = require('../middleware/rateLimiting');
 const { loggingSQLInjectionFilter } = require('../middleware/sqlInjectionFilter');
-const { customValidations } = require('../middleware/validator');
 const storageService = require('../services/storage');
 const { logger } = require('../config/logger');
 const { AppError } = require('../errors/AppError');
@@ -54,11 +53,22 @@ router.post('/avatar',
   authenticate,
   uploadRateLimit,
   upload.single('avatar'),
-  customValidations.validateFileUpload(['image/jpeg', 'image/png', 'image/gif', 'image/webp'], 5 * 1024 * 1024),
   async (req, res, next) => {
     try {
       if (!req.file) {
         return next(new AppError('No file uploaded', 400));
+      }
+
+      // Validate file type and size for avatar
+      const allowedTypes = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
+      const maxSize = 5 * 1024 * 1024; // 5MB
+
+      if (!allowedTypes.includes(req.file.mimetype)) {
+        return next(new AppError(`File type ${req.file.mimetype} is not allowed for avatar`, 400));
+      }
+
+      if (req.file.size > maxSize) {
+        return next(new AppError(`File size exceeds maximum allowed size of ${maxSize} bytes`, 400));
       }
 
       const result = await storageService.uploadFile(
@@ -110,11 +120,22 @@ router.post('/cover',
   authenticate,
   uploadRateLimit,
   upload.single('cover'),
-  customValidations.validateFileUpload(['image/jpeg', 'image/png', 'image/gif', 'image/webp'], 10 * 1024 * 1024),
   async (req, res, next) => {
     try {
       if (!req.file) {
         return next(new AppError('No file uploaded', 400));
+      }
+
+      // Validate file type and size for cover
+      const allowedTypes = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
+      const maxSize = 10 * 1024 * 1024; // 10MB
+
+      if (!allowedTypes.includes(req.file.mimetype)) {
+        return next(new AppError(`File type ${req.file.mimetype} is not allowed for cover`, 400));
+      }
+
+      if (req.file.size > maxSize) {
+        return next(new AppError(`File size exceeds maximum allowed size of ${maxSize} bytes`, 400));
       }
 
       const result = await storageService.uploadFile(
@@ -170,6 +191,22 @@ router.post('/post-media',
     try {
       if (!req.files || req.files.length === 0) {
         return next(new AppError('No files uploaded', 400));
+      }
+
+      // Validate each file
+      const allowedTypes = [
+        'image/jpeg', 'image/png', 'image/gif', 'image/webp',
+        'video/mp4', 'video/avi', 'video/mov'
+      ];
+      const maxSize = 10 * 1024 * 1024; // 10MB per file
+
+      for (const file of req.files) {
+        if (!allowedTypes.includes(file.mimetype)) {
+          return next(new AppError(`File type ${file.mimetype} is not allowed`, 400));
+        }
+        if (file.size > maxSize) {
+          return next(new AppError(`File size exceeds maximum allowed size of ${maxSize} bytes`, 400));
+        }
       }
 
       const uploadPromises = req.files.map(file => 
@@ -229,6 +266,22 @@ router.post('/message-media',
     try {
       if (!req.file) {
         return next(new AppError('No file uploaded', 400));
+      }
+
+      // Validate file for messages
+      const allowedTypes = [
+        'image/jpeg', 'image/png', 'image/gif', 'image/webp',
+        'video/mp4', 'video/avi', 'video/mov',
+        'audio/mp3', 'audio/wav', 'audio/aac'
+      ];
+      const maxSize = 10 * 1024 * 1024; // 10MB
+
+      if (!allowedTypes.includes(req.file.mimetype)) {
+        return next(new AppError(`File type ${req.file.mimetype} is not allowed for messages`, 400));
+      }
+
+      if (req.file.size > maxSize) {
+        return next(new AppError(`File size exceeds maximum allowed size of ${maxSize} bytes`, 400));
       }
 
       const result = await storageService.uploadFile(

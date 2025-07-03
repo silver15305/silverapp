@@ -125,7 +125,7 @@ class CryptoManager {
     try {
       const keyBuffer = Buffer.from(key, 'base64');
       const iv = crypto.randomBytes(this.ivLength);
-      const cipher = crypto.createCipher(this.algorithm, keyBuffer);
+      const cipher = crypto.createCipheriv(this.algorithm, keyBuffer, iv);
       cipher.setAAD(Buffer.from('silverapp', 'utf8'));
 
       let encrypted = cipher.update(text, 'utf8', 'hex');
@@ -154,7 +154,7 @@ class CryptoManager {
       const keyBuffer = Buffer.from(key, 'base64');
       const iv = Buffer.from(encryptedData.iv, 'hex');
       const tag = Buffer.from(encryptedData.tag, 'hex');
-      const decipher = crypto.createDecipher(this.algorithm, keyBuffer);
+      const decipher = crypto.createDecipheriv(this.algorithm, keyBuffer, iv);
       
       decipher.setAAD(Buffer.from('silverapp', 'utf8'));
       decipher.setAuthTag(tag);
@@ -211,12 +211,12 @@ class ValidationManager {
     if (typeof input !== 'string') return input;
     
     return input
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;')
-      .replace(/'/g, '&#x27;')
-      .replace(/\//g, '&#x2F;');
+      .replace(/&/g, '&')
+      .replace(/</g, '<')
+      .replace(/>/g, '>')
+      .replace(/"/g, '"')
+      .replace(/'/g, ''')
+      .replace(/\//g, '/');
   }
 
   /**

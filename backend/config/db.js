@@ -88,6 +88,9 @@ const initializeDatabase = async () => {
     const Friend = require('../models/Friend');
     const Message = require('../models/Message');
     const Notification = require('../models/Notification');
+    const PaymentOrder = require('../models/PaymentOrder');
+    const Gift = require('../models/Gift');
+    const CurrencyTransaction = require('../models/CurrencyTransaction');
 
     // Define associations
     setupAssociations();
@@ -116,10 +119,17 @@ const setupAssociations = () => {
   const Friend = require('../models/Friend');
   const Message = require('../models/Message');
   const Notification = require('../models/Notification');
+  const PaymentOrder = require('../models/PaymentOrder');
+  const Gift = require('../models/Gift');
+  const CurrencyTransaction = require('../models/CurrencyTransaction');
 
   // User associations
   User.hasMany(Post, { foreignKey: 'user_id', as: 'posts' });
   User.hasMany(Notification, { foreignKey: 'user_id', as: 'notifications' });
+  User.hasMany(PaymentOrder, { foreignKey: 'userId', as: 'paymentOrders' });
+  User.hasMany(Gift, { foreignKey: 'senderId', as: 'sentGifts' });
+  User.hasMany(Gift, { foreignKey: 'recipientId', as: 'receivedGifts' });
+  User.hasMany(CurrencyTransaction, { foreignKey: 'userId', as: 'currencyTransactions' });
   
   // Friend associations
   User.belongsToMany(User, {
@@ -141,6 +151,16 @@ const setupAssociations = () => {
   // Notification associations
   Notification.belongsTo(User, { foreignKey: 'user_id', as: 'user' });
   Notification.belongsTo(User, { foreignKey: 'from_user_id', as: 'fromUser' });
+
+  // PaymentOrder associations
+  PaymentOrder.belongsTo(User, { foreignKey: 'userId', as: 'user' });
+
+  // Gift associations
+  Gift.belongsTo(User, { foreignKey: 'senderId', as: 'sender' });
+  Gift.belongsTo(User, { foreignKey: 'recipientId', as: 'recipient' });
+
+  // CurrencyTransaction associations
+  CurrencyTransaction.belongsTo(User, { foreignKey: 'userId', as: 'user' });
 
   logger.info('Model associations established');
 };
