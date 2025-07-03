@@ -216,6 +216,7 @@ class ValidationManager {
       .replace(/>/g, '>')
       .replace(/"/g, '"')
       .replace(/'/g, ''')
+      )
       .replace(/\//g, '/');
   }
 
