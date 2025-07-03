@@ -463,36 +463,6 @@ const customValidations = {
       logger.error('Password strength validation error:', error);
       return next(new ValidationError('Password validation failed'));
     }
-  },
-  
-  /**
-   * Validate file upload
-   */
-  validateFileUpload: (allowedTypes = ['image/jpeg', 'image/png', 'image/gif'], maxSize = 10 * 1024 * 1024) => {
-    return (req, res, next) => {
-      try {
-        if (!req.file && !req.files) {
-          return next();
-        }
-        
-        const files = req.files || [req.file];
-        
-        for (const file of files) {
-          if (!allowedTypes.includes(file.mimetype)) {
-            return next(new ValidationError(`File type ${file.mimetype} is not allowed`));
-          }
-          
-          if (file.size > maxSize) {
-            return next(new ValidationError(`File size exceeds maximum allowed size of ${maxSize} bytes`));
-          }
-        }
-        
-        next();
-      } catch (error) {
-        logger.error('File upload validation error:', error);
-        return next(new ValidationError('File validation failed'));
-      }
-    };
   }
 };
 

@@ -505,52 +505,100 @@ Message.getConversationMessages = async function(conversationId, userId, limit =
 };
 
 /**
- * Get user conversations
+ * Get user conversations using Sequelize ORM instead of raw SQL
  * @param {string} userId - User ID
  * @param {number} limit - Number of conversations to fetch
  * @returns {Promise<Object[]>} Array of conversations with last message
  */
 Message.getUserConversations = async function(userId, limit = 20) {
-  const conversations = await sequelize.query(`
-    SELECT 
-      m.conversation_id,
-      m.id as last_message_id,
-      m.content as last_message_content,
-      m.message_type as last_message_type,
-      m.created_at as last_message_time,
-      m.sender_id as last_sender_id,
-      u1.username as other_user_username,
-      u1.first_name as other_user_first_name,
-      u1.last_name as other_user_last_name,
-      u1.profile_picture as other_user_profile_picture,
-      u1.is_verified as other_user_verified,
-      (SELECT COUNT(*) FROM messages m2 
-       WHERE m2.conversation_id = m.conversation_id 
-       AND m2.receiver_id = :userId 
-       AND m2.is_read = false 
-       AND m2.is_deleted = false) as unread_count
-    FROM messages m
-    INNER JOIN (
-      SELECT conversation_id, MAX(created_at) as max_time
-      FROM messages 
-      WHERE (sender_id = :userId OR receiver_id = :userId)
-      AND is_deleted = false
-      GROUP BY conversation_id
-    ) latest ON m.conversation_id = latest.conversation_id AND m.created_at = latest.max_time
-    LEFT JOIN users u1 ON (
-      CASE 
-        WHEN m.sender_id = :userId THEN u1.id = m.receiver_id
-        ELSE u1.id = m.sender_id
-      END
-    )
-    ORDER BY m.created_at DESC
-    LIMIT :limit
-  `, {
-    replacements: { userId, limit },
-    type: sequelize.QueryTypes.SELECT
-  });
-  
-  return conversations;
+  try {
+    const User = sequelize.models.User;
+    
+    // Get all conversations for the user with their latest message
+    const conversations = await Message.findAll({
+      attributes: [
+        'conversation_id',
+        [sequelize.fn('MAX', sequelize.col('created_at')), 'last_message_time']
+      ],
+      where: {
+        [sequelize.Sequelize.Op.or]: [
+          { sender_id: userId },
+          { receiver_id: userId }
+        ],
+        is_deleted: false
+      },
+      group: ['conversation_id'],
+      order: [[sequelize.fn('MAX', sequelize.col('created_at')), 'DESC']],
+      limit: limit,
+      raw: true
+    });
+
+    // Get the actual last messages and conversation details
+    const conversationDetails = await Promise.all(
+      conversations.map(async (conv) => {
+        // Get the last message for this conversation
+        const lastMessage = await Message.findOne({
+          where: {
+            conversation_id: conv.conversation_id,
+            is_deleted: false
+          },
+          order: [['created_at', 'DESC']],
+          include: [
+            {
+              model: User,
+              as: 'sender',
+              attributes: ['id', 'username', 'first_name', 'last_name', 'profile_picture', 'is_verified']
+            }
+          ]
+        });
+
+        if (!lastMessage) return null;
+
+        // Determine the other user in the conversation
+        const otherUserId = lastMessage.sender_id === userId ? 
+          lastMessage.receiver_id : lastMessage.sender_id;
+        
+        const otherUser = await User.findByPk(otherUserId, {
+          attributes: ['id', 'username', 'first_name', 'last_name', 'profile_picture', 'is_verified']
+        });
+
+        if (!otherUser) return null;
+
+        // Get unread count for this conversation
+        const unreadCount = await Message.count({
+          where: {
+            conversation_id: conv.conversation_id,
+            receiver_id: userId,
+            is_read: false,
+            is_deleted: false
+          }
+        });
+
+        return {
+          conversation_id: conv.conversation_id,
+          last_message_id: lastMessage.id,
+          last_message_content: lastMessage.content,
+          last_message_type: lastMessage.message_type,
+          last_message_time: lastMessage.created_at,
+          last_sender_id: lastMessage.sender_id,
+          other_user_id: otherUser.id,
+          other_user_username: otherUser.username,
+          other_user_first_name: otherUser.first_name,
+          other_user_last_name: otherUser.last_name,
+          other_user_profile_picture: otherUser.profile_picture,
+          other_user_verified: otherUser.is_verified,
+          unread_count: unreadCount
+        };
+      })
+    );
+
+    // Filter out null results and return
+    return conversationDetails.filter(conv => conv !== null);
+
+  } catch (error) {
+    console.error('Error getting user conversations:', error);
+    throw error;
+  }
 };
 
 /**

@@ -334,11 +334,11 @@ Post.prototype.incrementShares = async function() {
 };
 
 /**
- * Check if user can view this post
+ * Check if user can view this post with complete privacy logic
  * @param {string} userId - User ID to check
- * @returns {boolean} Whether user can view the post
+ * @returns {Promise<boolean>} Whether user can view the post
  */
-Post.prototype.canUserView = function(userId) {
+Post.prototype.canUserView = async function(userId) {
   if (this.is_deleted || !this.is_published) {
     return false;
   }
@@ -351,7 +351,24 @@ Post.prototype.canUserView = function(userId) {
     return false;
   }
   
-  // For 'friends' privacy, additional logic would be needed to check friendship
+  // Handle 'friends' privacy
+  if (this.privacy === 'friends') {
+    // Post owner can always view their own posts
+    if (this.user_id === userId) {
+      return true;
+    }
+    
+    // Check if viewer is friends with post owner
+    const Friend = sequelize.models.Friend;
+    if (Friend) {
+      const areFriends = await Friend.areFriends(userId, this.user_id);
+      return areFriends;
+    }
+    
+    // If Friend model is not available, deny access for safety
+    return false;
+  }
+  
   return true;
 };
 
@@ -402,22 +419,46 @@ Post.prototype.extractMentions = function() {
  */
 
 /**
- * Get feed posts for a user
+ * Get feed posts for a user with complete privacy logic
  * @param {string} userId - User ID
  * @param {number} limit - Number of posts to fetch
  * @param {number} offset - Offset for pagination
  * @returns {Promise<Post[]>} Array of posts
  */
 Post.getFeedPosts = async function(userId, limit = 20, offset = 0) {
+  const Friend = sequelize.models.Friend;
+  
+  // Get user's friend IDs
+  let friendIds = [];
+  if (Friend) {
+    try {
+      const friendships = await Friend.getUserFriends(userId);
+      friendIds = friendships.map(friendship => 
+        friendship.user_id === userId ? friendship.friend_id : friendship.user_id
+      );
+    } catch (error) {
+      console.error('Error getting friends for feed:', error);
+    }
+  }
+  
+  // Build where clause for feed posts
+  const whereClause = {
+    post_type: 'post',
+    [sequelize.Sequelize.Op.or]: [
+      // Public posts
+      { privacy: 'public' },
+      // User's own posts
+      { user_id: userId },
+      // Friends' posts (only if user has friends)
+      ...(friendIds.length > 0 ? [{
+        privacy: 'friends',
+        user_id: { [sequelize.Sequelize.Op.in]: friendIds }
+      }] : [])
+    ]
+  };
+  
   return await Post.scope(['published', 'withAuthor']).findAll({
-    where: {
-      post_type: 'post',
-      [sequelize.Sequelize.Op.or]: [
-        { privacy: 'public' },
-        { user_id: userId }
-        // Add friends' posts logic here
-      ]
-    },
+    where: whereClause,
     order: [['created_at', 'DESC']],
     limit: limit,
     offset: offset
@@ -425,7 +466,7 @@ Post.getFeedPosts = async function(userId, limit = 20, offset = 0) {
 };
 
 /**
- * Get user's posts
+ * Get user's posts with complete privacy logic
  * @param {string} userId - User ID
  * @param {string} viewerId - Viewer's user ID
  * @param {number} limit - Number of posts to fetch
@@ -442,8 +483,26 @@ Post.getUserPosts = async function(userId, viewerId, limit = 20, offset = 0) {
   
   // If viewing own posts, show all privacy levels
   if (userId !== viewerId) {
-    whereClause.privacy = { [sequelize.Sequelize.Op.in]: ['public', 'friends'] };
-    // Add friend check logic here for 'friends' privacy
+    const Friend = sequelize.models.Friend;
+    let areFriends = false;
+    
+    // Check if viewer is friends with the user
+    if (Friend && viewerId) {
+      try {
+        areFriends = await Friend.areFriends(viewerId, userId);
+      } catch (error) {
+        console.error('Error checking friendship for user posts:', error);
+      }
+    }
+    
+    // Determine which privacy levels the viewer can see
+    if (areFriends) {
+      // Friends can see public and friends posts
+      whereClause.privacy = { [sequelize.Sequelize.Op.in]: ['public', 'friends'] };
+    } else {
+      // Non-friends can only see public posts
+      whereClause.privacy = 'public';
+    }
   }
   
   return await Post.scope('withAuthor').findAll({

@@ -4,7 +4,7 @@
  */
 
 const express = require('express');
-const { authenticate } = require('../middleware/auth');
+const { authenticate, requireRole } = require('../middleware/auth');
 const { validate } = require('../middleware/validator');
 const { loggingSQLInjectionFilter } = require('../middleware/sqlInjectionFilter');
 const pushService = require('../services/push');
@@ -173,7 +173,7 @@ router.get('/tokens',
  */
 router.post('/send',
   authenticate,
-  // requireRole('admin'), // Uncomment when role-based auth is implemented
+  requireRole('admin'), // Uncommented to enforce admin role
   loggingSQLInjectionFilter,
   validate(pushSchemas.sendNotification),
   async (req, res, next) => {

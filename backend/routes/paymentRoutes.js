@@ -8,6 +8,7 @@ const { authenticate } = require('../middleware/auth');
 const { validate } = require('../middleware/validator');
 const { loggingSQLInjectionFilter } = require('../middleware/sqlInjectionFilter');
 const paymentService = require('../services/payment');
+const PaymentProcessor = require('../services/paymentProcessor');
 const { logger } = require('../config/logger');
 const { AppError } = require('../errors/AppError');
 const Joi = require('joi');
@@ -20,9 +21,14 @@ const paymentSchemas = {
     amount: Joi.number().positive().required(),
     description: Joi.string().min(1).max(200).required(),
     provider: Joi.string().valid('wechat', 'alipay').default('wechat'),
-    orderType: Joi.string().valid('premium', 'gift', 'boost').required(),
+    orderType: Joi.string().valid('premium', 'gift', 'boost', 'coins').required(),
     returnUrl: Joi.string().uri().optional(),
-    notifyUrl: Joi.string().uri().optional()
+    notifyUrl: Joi.string().uri().optional(),
+    // Additional data for specific order types
+    recipientId: Joi.string().uuid().optional(), // For gifts
+    postId: Joi.string().uuid().optional(), // For post boosts
+    boostDuration: Joi.number().positive().optional(), // For post boosts
+    giftType: Joi.string().valid('premium', 'coins', 'sticker').optional() // For gifts
   }),
 
   queryOrder: Joi.object({
@@ -49,11 +55,29 @@ router.post('/create-order',
   validate(paymentSchemas.createOrder),
   async (req, res, next) => {
     try {
-      const { amount, description, provider, orderType, returnUrl, notifyUrl } = req.body;
+      const { 
+        amount, 
+        description, 
+        provider, 
+        orderType, 
+        returnUrl, 
+        notifyUrl,
+        recipientId,
+        postId,
+        boostDuration,
+        giftType
+      } = req.body;
       const userId = req.user.id;
 
       // Generate unique order number
       const outTradeNo = `${orderType}_${userId}_${Date.now()}`;
+
+      // Prepare additional payment data
+      const additionalData = {};
+      if (recipientId) additionalData.recipientId = recipientId;
+      if (postId) additionalData.postId = postId;
+      if (boostDuration) additionalData.boostDuration = boostDuration;
+      if (giftType) additionalData.giftType = giftType;
 
       const orderData = {
         outTradeNo,
@@ -64,7 +88,8 @@ router.post('/create-order',
         openid: req.user.wechat_openid, // For WeChat Pay
         tradeType: 'JSAPI',
         notifyUrl: notifyUrl || `${req.protocol}://${req.get('host')}/api/v1/payment/callback/${provider}`,
-        returnUrl: returnUrl || `${req.protocol}://${req.get('host')}/payment/success`
+        returnUrl: returnUrl || `${req.protocol}://${req.get('host')}/payment/success`,
+        ...additionalData
       };
 
       const result = await paymentService.createPaymentOrder(orderData, provider);
@@ -73,16 +98,25 @@ router.post('/create-order',
         return next(new AppError('Payment order creation failed: ' + result.error, 500));
       }
 
-      // Store order in database (you would implement this)
-      // await PaymentOrder.create({
-      //   userId,
-      //   outTradeNo,
-      //   amount,
-      //   description,
-      //   provider,
-      //   orderType,
-      //   status: 'pending'
-      // });
+      // Store order in database
+      const PaymentOrder = require('../models/PaymentOrder');
+      if (PaymentOrder) {
+        try {
+          await PaymentOrder.create({
+            userId,
+            outTradeNo,
+            amount,
+            description,
+            provider,
+            orderType,
+            status: 'pending',
+            paymentData: additionalData
+          });
+        } catch (dbError) {
+          logger.error('Failed to store payment order in database:', dbError);
+          // Continue with payment creation even if DB storage fails
+        }
+      }
 
       logger.info('Payment order created:', {
         userId,
@@ -131,14 +165,21 @@ router.post('/callback/wechat',
       const { outTradeNo, transactionId, totalFee } = verification;
 
       // Update order status in database
-      // await PaymentOrder.update(
-      //   { 
-      //     status: 'paid',
-      //     transactionId,
-      //     paidAt: new Date()
-      //   },
-      //   { where: { outTradeNo } }
-      // );
+      const PaymentOrder = require('../models/PaymentOrder');
+      if (PaymentOrder) {
+        try {
+          await PaymentOrder.update(
+            { 
+              status: 'paid',
+              transactionId,
+              paidAt: new Date()
+            },
+            { where: { outTradeNo } }
+          );
+        } catch (dbError) {
+          logger.error('Failed to update payment order in database:', dbError);
+        }
+      }
 
       logger.info('WeChat Pay callback processed:', {
         outTradeNo,
@@ -146,8 +187,12 @@ router.post('/callback/wechat',
         totalFee
       });
 
-      // Process the successful payment (grant premium features, etc.)
-      await processSuccessfulPayment(outTradeNo, 'wechat');
+      // Process the successful payment
+      await PaymentProcessor.processSuccessfulPayment(outTradeNo, 'wechat', {
+        transactionId,
+        totalFee,
+        amount: totalFee / 100 // Convert back to yuan
+      });
 
       res.status(200).send('<xml><return_code><![CDATA[SUCCESS]]></return_code><return_msg><![CDATA[OK]]></return_msg></xml>');
 
@@ -178,14 +223,21 @@ router.post('/callback/alipay',
       const { outTradeNo, tradeNo, totalAmount } = verification;
 
       // Update order status in database
-      // await PaymentOrder.update(
-      //   { 
-      //     status: 'paid',
-      //     transactionId: tradeNo,
-      //     paidAt: new Date()
-      //   },
-      //   { where: { outTradeNo } }
-      // );
+      const PaymentOrder = require('../models/PaymentOrder');
+      if (PaymentOrder) {
+        try {
+          await PaymentOrder.update(
+            { 
+              status: 'paid',
+              transactionId: tradeNo,
+              paidAt: new Date()
+            },
+            { where: { outTradeNo } }
+          );
+        } catch (dbError) {
+          logger.error('Failed to update payment order in database:', dbError);
+        }
+      }
 
       logger.info('Alipay callback processed:', {
         outTradeNo,
@@ -194,7 +246,11 @@ router.post('/callback/alipay',
       });
 
       // Process the successful payment
-      await processSuccessfulPayment(outTradeNo, 'alipay');
+      await PaymentProcessor.processSuccessfulPayment(outTradeNo, 'alipay', {
+        tradeNo,
+        totalAmount,
+        amount: parseFloat(totalAmount)
+      });
 
       res.status(200).send('success');
 
@@ -267,13 +323,16 @@ router.post('/refund',
       const userId = req.user.id;
 
       // Verify order belongs to user and is refundable
-      // const order = await PaymentOrder.findOne({
-      //   where: { outTradeNo, userId, status: 'paid' }
-      // });
-      // 
-      // if (!order) {
-      //   return next(new AppError('Order not found or not refundable', 404));
-      // }
+      const PaymentOrder = require('../models/PaymentOrder');
+      if (PaymentOrder) {
+        const order = await PaymentOrder.findOne({
+          where: { outTradeNo, userId, status: 'paid' }
+        });
+        
+        if (!order) {
+          return next(new AppError('Order not found or not refundable', 404));
+        }
+      }
 
       const outRefundNo = `refund_${outTradeNo}_${Date.now()}`;
 
@@ -295,15 +354,25 @@ router.post('/refund',
       }
 
       // Update order status in database
-      // await PaymentOrder.update(
-      //   { 
-      //     status: 'refunded',
-      //     refundId: result.refundId,
-      //     refundedAt: new Date(),
-      //     refundReason
-      //   },
-      //   { where: { outTradeNo } }
-      // );
+      if (PaymentOrder) {
+        try {
+          await PaymentOrder.update(
+            { 
+              status: 'refunded',
+              refundId: result.refundId,
+              refundedAt: new Date(),
+              refundReason,
+              refundAmount
+            },
+            { where: { outTradeNo } }
+          );
+        } catch (dbError) {
+          logger.error('Failed to update refund status in database:', dbError);
+        }
+      }
+
+      // Process the refund (reverse order effects)
+      await PaymentProcessor.processRefund(outTradeNo, refundAmount, refundReason);
 
       logger.info('Payment refund processed:', {
         userId,
@@ -343,21 +412,37 @@ router.get('/orders',
       const { page = 1, limit = 20, status } = req.query;
       const userId = req.user.id;
 
-      // This would fetch from your PaymentOrder model
-      // const whereClause = { userId };
-      // if (status) {
-      //   whereClause.status = status;
-      // }
-      // 
-      // const orders = await PaymentOrder.findAll({
-      //   where: whereClause,
-      //   order: [['createdAt', 'DESC']],
-      //   limit: parseInt(limit),
-      //   offset: (page - 1) * limit
-      // });
+      const PaymentOrder = require('../models/PaymentOrder');
+      if (!PaymentOrder) {
+        return res.status(200).json({
+          status: 'success',
+          data: {
+            orders: [],
+            pagination: {
+              currentPage: parseInt(page),
+              totalItems: 0,
+              itemsPerPage: parseInt(limit),
+              hasNextPage: false
+            }
+          }
+        });
+      }
 
-      // Mock response for now
-      const orders = [];
+      const whereClause = { userId };
+      if (status) {
+        whereClause.status = status;
+      }
+      
+      const orders = await PaymentOrder.findAll({
+        where: whereClause,
+        order: [['createdAt', 'DESC']],
+        limit: parseInt(limit),
+        offset: (page - 1) * limit,
+        attributes: [
+          'id', 'outTradeNo', 'amount', 'description', 'provider', 
+          'orderType', 'status', 'createdAt', 'paidAt', 'refundedAt'
+        ]
+      });
 
       res.status(200).json({
         status: 'success',
@@ -378,44 +463,5 @@ router.get('/orders',
     }
   }
 );
-
-/**
- * Process successful payment
- * @param {string} outTradeNo - Order trade number
- * @param {string} provider - Payment provider
- */
-async function processSuccessfulPayment(outTradeNo, provider) {
-  try {
-    // Extract order info from trade number
-    const [orderType, userId] = outTradeNo.split('_');
-
-    // Grant premium features based on order type
-    switch (orderType) {
-      case 'premium':
-        // Grant premium membership
-        // await User.update(
-        //   { isPremium: true, premiumExpiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000) },
-        //   { where: { id: userId } }
-        // );
-        break;
-      case 'gift':
-        // Process gift
-        break;
-      case 'boost':
-        // Process post boost
-        break;
-    }
-
-    logger.info('Payment processed successfully:', {
-      outTradeNo,
-      provider,
-      orderType,
-      userId
-    });
-
-  } catch (error) {
-    logger.error('Payment processing failed:', error);
-  }
-}
 
 module.exports = router;

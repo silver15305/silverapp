@@ -296,7 +296,7 @@ class PaymentService {
   }
 
   /**
-   * Verify Alipay callback
+   * Verify Alipay callback with enhanced security
    * @param {Object} params - Callback parameters
    * @returns {Object} Verification result
    */
@@ -321,6 +321,29 @@ class PaymentService {
         tradeNo: params.trade_no
       });
 
+      // Enhanced verification: Query Alipay server to confirm transaction
+      if (isValid) {
+        this.verifyAlipayTransactionWithServer(params.out_trade_no, params.trade_no)
+          .then(serverVerification => {
+            if (!serverVerification.success) {
+              logger.warn('Alipay server verification failed:', {
+                outTradeNo: params.out_trade_no,
+                tradeNo: params.trade_no,
+                error: serverVerification.error
+              });
+            } else {
+              logger.info('Alipay server verification successful:', {
+                outTradeNo: params.out_trade_no,
+                tradeNo: params.trade_no,
+                serverStatus: serverVerification.tradeStatus
+              });
+            }
+          })
+          .catch(error => {
+            logger.error('Alipay server verification error:', error);
+          });
+      }
+
       return {
         isValid,
         data: params,
@@ -333,6 +356,73 @@ class PaymentService {
       logger.error('Alipay callback verification failed:', error);
       return {
         isValid: false,
+        error: error.message
+      };
+    }
+  }
+
+  /**
+   * Verify Alipay transaction with server (enhanced security)
+   * @param {string} outTradeNo - Order trade number
+   * @param {string} tradeNo - Alipay trade number
+   * @returns {Promise<Object>} Server verification result
+   */
+  async verifyAlipayTransactionWithServer(outTradeNo, tradeNo) {
+    try {
+      const params = {
+        app_id: this.alipayConfig.appId,
+        method: 'alipay.trade.query',
+        charset: 'utf-8',
+        sign_type: 'RSA2',
+        timestamp: new Date().toISOString().replace('T', ' ').substring(0, 19),
+        version: '1.0',
+        biz_content: JSON.stringify({
+          out_trade_no: outTradeNo,
+          trade_no: tradeNo
+        })
+      };
+
+      params.sign = this.generateAlipaySignature(params);
+
+      const response = await axios.post(
+        this.alipayConfig.gateway,
+        new URLSearchParams(params),
+        {
+          headers: {
+            'Content-Type': 'application/x-www-form-urlencoded'
+          },
+          timeout: 10000 // 10 second timeout
+        }
+      );
+
+      const result = JSON.parse(response.data);
+      const queryResponse = result.alipay_trade_query_response;
+
+      if (queryResponse.code === '10000') {
+        // Verify that the transaction details match
+        const isValidTransaction = 
+          queryResponse.out_trade_no === outTradeNo &&
+          queryResponse.trade_no === tradeNo &&
+          queryResponse.trade_status === 'TRADE_SUCCESS';
+
+        return {
+          success: isValidTransaction,
+          tradeStatus: queryResponse.trade_status,
+          data: queryResponse,
+          verified: isValidTransaction
+        };
+      } else {
+        return {
+          success: false,
+          error: queryResponse.sub_msg || queryResponse.msg,
+          code: queryResponse.code
+        };
+      }
+
+    } catch (error) {
+      logger.error('Alipay server verification failed:', error);
+      return {
+        success: false,
         error: error.message
       };
     }
